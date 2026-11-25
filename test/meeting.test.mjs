@@ -117,6 +117,7 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
             state,
             accepted: agreed,
             waiting: [],
+            ...(state === "recording" ? { elapsedMs: 12_000 } : {}),
           },
         };
       default:
@@ -270,7 +271,9 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     await press("Open meeting early");
     await press("Request recording consent");
     await press("Agree to recording and AI processing");
+    assert.equal(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length, 0);
     await press("Start audio recording");
+    assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length > 0);
     await press("End meeting for everyone");
     await act(async () => {
       dialog[2][1].onPress();

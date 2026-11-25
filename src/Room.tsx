@@ -37,8 +37,40 @@ type Controls = {
     accepted?: boolean;
     waiting?: string[];
     notice?: string;
+    elapsedMs?: number;
   };
 };
+const captureLabels: Record<string, string> = {
+  off: "Recording is off",
+  consent: "Waiting for recording consent",
+  starting: "Starting audio recording…",
+  recording: "Recording",
+  paused: "Recording paused",
+  stopping: "Stopping audio recording…",
+};
+
+function CaptureStatus({ state, elapsedMs }: { state: string; elapsedMs?: number }) {
+  const [elapsed, setElapsed] = useState(elapsedMs);
+  useEffect(() => {
+    setElapsed(elapsedMs);
+    if (state !== "recording" || elapsedMs === undefined) return;
+    const received = performance.now();
+    const timer = setInterval(() => setElapsed(elapsedMs + performance.now() - received), 250);
+    return () => clearInterval(timer);
+  }, [state, elapsedMs]);
+
+  const duration = state === "recording" ? elapsed : elapsedMs;
+  const seconds = Math.max(0, Math.floor((duration ?? 0) / 1000));
+  const recordedTime = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  return <View style={s.row}>
+    {state === "recording" && <View style={{ backgroundColor: "#a32944", borderRadius: 4, height: 8, width: 8 }} />}
+    <Text accessibilityLiveRegion="polite" style={s.text}>{captureLabels[state] ?? "Recording status unavailable"}</Text>
+    {duration !== undefined && (state === "recording" || state === "paused") && (
+      <Text accessibilityLabel={`Recorded time ${recordedTime}`} style={s.meta}>{recordedTime}</Text>
+    )}
+  </View>;
+}
+
 type Props = {
   meeting: Meeting;
   join: Join;
@@ -263,13 +295,7 @@ function Inside({
       {cap && (
         <View style={s.card}>
           <Text style={s.heading}>Meeting capture</Text>
-          <Text accessibilityLiveRegion="polite" style={s.text}>
-            {cap.state === "off"
-              ? "Recording is off"
-              : cap.state === "consent"
-                ? "Waiting for recording consent"
-                : cap.state}
-          </Text>
+          <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} />
           {cap.enabled &&
             cap.state === "off" &&
             cap.canManage &&
