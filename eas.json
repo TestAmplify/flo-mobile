@@ -1,0 +1,11 @@
+{
+  "cli": { "appVersionSource": "local" },
+  "build": {
+    "staging": {
+      "distribution": "internal",
+      "environment": "preview",
+      "android": { "buildType": "apk" }
+    },
+    "staging-simulator": { "extends": "staging", "ios": { "simulator": true } }
+  }
+}
