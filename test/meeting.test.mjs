@@ -28,7 +28,6 @@ test("Maya rejoins muted, records from the call controls, admits Leo and reviews
     agreed = false,
     preparing = true,
     canStartAlone = false,
-    recordingOptOut = false,
     waitingGuest = false,
     hasGuest = false,
     ended = false,
@@ -113,15 +112,14 @@ test("Maya rejoins muted, records from the call controls, admits Leo and reviews
         break;
       case "capture-start-early":
         assert.equal(hasGuest, false);
-        state = "recording";
+        state = "starting";
         waitingGuest = true;
         break;
       case "guest-decision":
         assert.deepEqual(body, { requestId: "guest-leo", decision: "approve" });
         waitingGuest = false;
         hasGuest = true;
-        recordingOptOut = true;
-        state = "off";
+        state = "recording";
         break;
       case "end":
         ended = true;
@@ -139,7 +137,7 @@ test("Maya rejoins muted, records from the call controls, admits Leo and reviews
             accepted: agreed,
             waiting: [],
             canStartAlone: canStartAlone && !hasGuest,
-            recordingOptOut,
+            waitingForAudio: state === "starting",
             ...(state === "recording" ? { elapsedMs: 12_000 } : {}),
           },
         };
@@ -311,9 +309,11 @@ test("Maya rejoins muted, records from the call controls, admits Leo and reviews
     await press("Recording options");
     await press("Start recording");
     assert.ok(calls.some(path => path.endsWith("/capture-start-early")));
+    assert.ok(tree.root.findAllByType("Text").some(node => node.props.children === "Ready to record · Waiting for audio"));
+    assert.equal(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length, 0);
     await press("1 guest waiting");
     await press("Admit guest");
-    assert.ok(tree.root.findAllByType("Text").some(node => node.props.children === "Continuing without recording"));
+    assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length > 0);
     const guestVideo = tree.root.findByType("VideoTrack");
     assert.equal(guestVideo.props.objectFit, "contain");
     assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Leo, microphone on" }).length > 0);

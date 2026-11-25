@@ -37,6 +37,8 @@ type Controls = {
     canManage: boolean;
     accepted?: boolean;
     waiting?: string[];
+    waitingForAudio?: boolean;
+    startFailed?: boolean;
     notice?: string;
     elapsedMs?: number;
     canStartAlone?: boolean;
@@ -55,7 +57,9 @@ const captureLabels: Record<string, string> = {
   stopping: "Stopping recording…",
 };
 
-function CaptureStatus({ state, elapsedMs, optedOut }: { state: string; elapsedMs?: number; optedOut?: boolean }) {
+function CaptureStatus({ state, elapsedMs, optedOut, waitingForAudio, startFailed }: {
+  state: string; elapsedMs?: number; optedOut?: boolean; waitingForAudio?: boolean; startFailed?: boolean;
+}) {
   const [elapsed, setElapsed] = useState(elapsedMs);
   useEffect(() => {
     setElapsed(elapsedMs);
@@ -69,9 +73,11 @@ function CaptureStatus({ state, elapsedMs, optedOut }: { state: string; elapsedM
   const continuingWithoutRecording = optedOut && (state === "off" || state === "paused");
   const seconds = Math.max(0, Math.floor((duration ?? 0) / 1000));
   const recordedTime = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const label = waitingForAudio ? "Ready to record · Waiting for audio" : startFailed ? "Recording didn’t start" :
+    continuingWithoutRecording ? "Continuing without recording" : captureLabels[state] ?? "Recording status unavailable";
   return <View style={[s.row, { gap: 6, flexShrink: 1 }]}>
     {state === "recording" && <View style={{ backgroundColor: "#a32944", borderRadius: 4, height: 8, width: 8 }} />}
-    <Text accessibilityLiveRegion="polite" style={[roomSecondary, state === "recording" && roomText]}>{continuingWithoutRecording ? "Continuing without recording" : captureLabels[state] ?? "Recording status unavailable"}</Text>
+    <Text accessibilityLiveRegion="polite" style={[roomSecondary, state === "recording" && roomText]}>{label}</Text>
     {duration !== undefined && !continuingWithoutRecording && (state === "recording" || state === "paused") && (
       <Text accessibilityLabel={`Recorded time ${recordedTime}`} style={roomSecondary}>{recordedTime}</Text>
     )}
@@ -257,7 +263,8 @@ function Inside({
   return (
     <RoomCanvas title={meeting.title} live={Boolean(control && !preparing)}
       subtitle={tracks.length + (tracks.length === 1 ? " participant" : " participants")}
-      status={captureAvailable && <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut} />}
+      status={captureAvailable && <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut}
+        waitingForAudio={cap.waitingForAudio} startFailed={cap.startFailed} />}
       footer={footer}>
       {!!errorMessage && !sheet && <Notice>{errorMessage}</Notice>}
       {preparing && control?.isHost && act("Open meeting early", "open-booking-early", { kind: "inline" })}
@@ -283,7 +290,8 @@ function Inside({
       {sheet === "recording" && <RoomSheet title="Recording" busy={busy} close={() => setSheet(null)}>
         <Notice>{errorMessage}</Notice>
         {cap ? <>
-          <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut} />
+          <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut}
+            waitingForAudio={cap.waitingForAudio} startFailed={cap.startFailed} />
           <Text style={roomSecondary}>{cap.notice || "Flo uses AI to transcribe recorded audio and make meeting notes."}</Text>
           {cap.enabled && cap.state === "off" && cap.canManage && !cap.recordingOptOut &&
             (canStartRecording ? act("Start recording", "capture-start-early", { dismiss: true }) :
@@ -307,7 +315,7 @@ function Inside({
             </>
           )}
           {cap.canManage && ["starting", "recording"].includes(cap.state) &&
-            act("Stop recording", "capture-stop", { dismiss: true })}
+            act(cap.waitingForAudio ? "Cancel recording" : "Stop recording", "capture-stop", { dismiss: true })}
           {cap.canManage && cap.state === "recording" && act("Pause recording", "capture-pause", { kind: "secondary", dismiss: true })}
           {cap.canManage && cap.state === "paused" && !cap.recordingOptOut && act("Resume recording", "capture-resume", { dismiss: true })}
           {canWithdraw && act("Withdraw consent", "capture-withdraw", { dismiss: true })}
