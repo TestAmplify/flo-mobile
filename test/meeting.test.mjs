@@ -31,6 +31,7 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     done = false,
     sent;
   let dialog, persisted;
+  let awakeRooms = 0;
   const mediaProps = [],
     calls = [];
   const captures = {
@@ -151,6 +152,14 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     ].map((k) => [k, k]),
   );
   const mocks = {
+    "expo-keep-awake": {
+      useKeepAwake() {
+        React.useEffect(() => {
+          awakeRooms += 1;
+          return () => { awakeRooms -= 1; };
+        }, []);
+      },
+    },
     "react-native": {
       ...hosts,
       Platform: { OS: "ios" },
@@ -246,14 +255,18 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     await press("Sign in");
     assert.equal(persisted, "fake-host");
     await press("Enter room early");
+    assert.equal(awakeRooms, 0);
     await press("Enter room early");
+    assert.equal(awakeRooms, 1);
     await press("Leave room");
+    assert.equal(awakeRooms, 0);
     await press("Enter room early");
     await press("Enter room early");
     assert.deepEqual(mediaProps, [
       [false, false],
       [false, false],
     ]);
+    assert.equal(awakeRooms, 1);
     await press("Open meeting early");
     await press("Request recording consent");
     await press("Agree to recording and AI processing");
@@ -263,6 +276,7 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
       dialog[2][1].onPress();
     });
     await press("Review & send");
+    assert.equal(awakeRooms, 0);
     const input = tree.root
       .findAllByType("TextInput")
       .find((n) => n.props.accessibilityLabel === "Meeting notes");

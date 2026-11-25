@@ -6,6 +6,7 @@ import React, {
   useState,
 } from "react";
 import { Alert, Text, View } from "react-native";
+import { useKeepAwake } from "expo-keep-awake";
 import {
   AudioSession,
   LiveKitRoom,
@@ -109,6 +110,7 @@ function Inside({
   onEnd,
   endRequested,
 }: Props & { endRequested: React.RefObject<boolean> }) {
+  useKeepAwake(undefined, { suppressDeactivateWarnings: true });
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled } =
     useLocalParticipant();
   const tracks = useTracks([
