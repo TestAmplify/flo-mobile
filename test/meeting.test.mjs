@@ -301,7 +301,7 @@ test("Maya rejoins muted, records from the call controls, admits Leo and reviews
     await press("Open meeting early");
     await press("Recording options");
     await press("Request recording consent");
-    await press("Agree to recording and AI processing");
+    await press("OK");
     assert.equal(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length, 0);
     await press("Start audio recording");
     assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length > 0);

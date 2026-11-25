@@ -40,6 +40,9 @@ type Controls = {
     notice?: string;
     elapsedMs?: number;
     canStartAlone?: boolean;
+    canStartRecording?: boolean;
+    individualChoice?: boolean;
+    required?: boolean;
     recordingOptOut?: boolean;
   };
 };
@@ -161,7 +164,6 @@ function Inside({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [sheet, setSheet] = useState<"recording" | "guests" | "leave" | null>(null);
-  const [showNotice, setShowNotice] = useState(false);
   const [focused, setFocused] = useState<string>();
   const lock = useRef(false);
   const control = poll.value,
@@ -233,8 +235,9 @@ function Inside({
     </ParticipantTile>;
   }
   const captureAvailable = cap?.enabled && !preparing;
+  const canStartRecording = cap?.canStartRecording || cap?.canStartAlone;
   const canWithdraw = !control?.isHost && !cap?.recordingOptOut && cap?.accepted &&
-    ["starting", "recording", "paused"].includes(cap.state);
+    !cap.individualChoice && ["starting", "recording", "paused"].includes(cap.state);
   const errorMessage = roomError || error || poll.error;
   const footer = <RoomControls>
     {join.canPublish && <>
@@ -247,7 +250,7 @@ function Inside({
     </>}
     {captureAvailable && <RoomControl icon="radio-button-on-outline" label="Recording"
       accessibilityLabel="Recording options" active={cap.state === "recording"} disabled={busy}
-      onPress={() => { setShowNotice(false); setSheet("recording"); }} />}
+      onPress={() => setSheet("recording")} />}
     <RoomControl icon="call-outline" label="Leave" accessibilityLabel="Leave meeting options" danger disabled={busy}
       onPress={() => setSheet("leave")} />
   </RoomControls>;
@@ -281,18 +284,17 @@ function Inside({
         <Notice>{errorMessage}</Notice>
         {cap ? <>
           <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut} />
+          <Text style={roomSecondary}>{cap.notice || "Flo uses AI to transcribe recorded audio and make meeting notes."}</Text>
           {cap.enabled && cap.state === "off" && cap.canManage && !cap.recordingOptOut &&
-            (cap.canStartAlone ? <>
-              <Text style={roomSecondary}>Flo records audio and processes it with AI to create meeting notes.</Text>
-              {act("Start recording", "capture-start-early", { dismiss: true })}
-            </> : act("Request recording consent", "capture-request"))}
+            (canStartRecording ? act("Start recording", "capture-start-early", { dismiss: true }) :
+              cap.required ? act("Start recording", "capture-request", { dismiss: true }) : act("Request recording consent", "capture-request"))}
           {cap.state === "consent" && (
             <>
               {waitingForMyConsent && (
                 <>
-                  <Text style={roomSecondary}>Flo records audio and processes it with AI to create meeting notes.</Text>
-                  {act("Agree to recording and AI processing", "capture-consent", { body: { accepted: true }, dismiss: !cap.canManage })}
-                  {act("Decline recording", "capture-consent", { body: { accepted: false }, dismiss: true, kind: "secondary" })}
+                  {act("OK", "capture-consent", { body: { accepted: true }, dismiss: !cap.canManage })}
+                  {cap.individualChoice && !cap.canManage ? <RoomButton label="Leave meeting" onPress={onLeave} disabled={busy} /> :
+                    act("Decline recording", "capture-consent", { body: { accepted: false }, dismiss: true, kind: "secondary" })}
                 </>
               )}
               {!!cap.waiting?.length && (
@@ -306,11 +308,9 @@ function Inside({
           )}
           {cap.canManage && ["starting", "recording"].includes(cap.state) &&
             act("Stop recording", "capture-stop", { dismiss: true })}
+          {cap.canManage && cap.state === "recording" && act("Pause recording", "capture-pause", { kind: "secondary", dismiss: true })}
           {cap.canManage && cap.state === "paused" && !cap.recordingOptOut && act("Resume recording", "capture-resume", { dismiss: true })}
           {canWithdraw && act("Withdraw consent", "capture-withdraw", { dismiss: true })}
-          {!!cap.notice && <RoomButton label={showNotice ? "Hide recording details" : "Recording details"}
-            onPress={() => setShowNotice(current => !current)} />}
-          {showNotice && <Text style={roomSecondary}>{cap.notice}</Text>}
         </> : <Text style={roomSecondary}>Recording status unavailable.</Text>}
       </RoomSheet>}
     </RoomCanvas>
