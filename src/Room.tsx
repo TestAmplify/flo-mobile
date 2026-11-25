@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Alert, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { useKeepAwake } from "expo-keep-awake";
 import {
   AudioSession,
@@ -18,7 +18,7 @@ import {
 import { Track } from "livekit-client";
 import { client, Meeting, message, useResource } from "./api";
 import { Action, Notice, s } from "./ui";
-import { ParticipantTile, RoomCanvas, RoomControl, RoomControls, RoomPanel, roomSecondary, roomText, type RoomDevices } from "./RoomView";
+import { ParticipantPreviews, ParticipantTile, RoomButton, RoomCanvas, RoomControl, RoomControls, RoomSheet, roomSecondary, roomText, type RoomDevices } from "./RoomView";
 
 export type Join = {
   accessToken: string;
@@ -46,10 +46,10 @@ type Controls = {
 const captureLabels: Record<string, string> = {
   off: "Recording is off",
   consent: "Waiting for recording consent",
-  starting: "Starting audio recording…",
+  starting: "Starting recording…",
   recording: "Recording",
   paused: "Recording paused",
-  stopping: "Stopping audio recording…",
+  stopping: "Stopping recording…",
 };
 
 function CaptureStatus({ state, elapsedMs, optedOut }: { state: string; elapsedMs?: number; optedOut?: boolean }) {
@@ -66,9 +66,9 @@ function CaptureStatus({ state, elapsedMs, optedOut }: { state: string; elapsedM
   const continuingWithoutRecording = optedOut && (state === "off" || state === "paused");
   const seconds = Math.max(0, Math.floor((duration ?? 0) / 1000));
   const recordedTime = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-  return <View style={s.row}>
+  return <View style={[s.row, { gap: 6, flexShrink: 1 }]}>
     {state === "recording" && <View style={{ backgroundColor: "#a32944", borderRadius: 4, height: 8, width: 8 }} />}
-    <Text accessibilityLiveRegion="polite" style={roomText}>{continuingWithoutRecording ? "Meeting continues without recording" : captureLabels[state] ?? "Recording status unavailable"}</Text>
+    <Text accessibilityLiveRegion="polite" style={[roomSecondary, state === "recording" && roomText]}>{continuingWithoutRecording ? "Continuing without recording" : captureLabels[state] ?? "Recording status unavailable"}</Text>
     {duration !== undefined && !continuingWithoutRecording && (state === "recording" || state === "paused") && (
       <Text accessibilityLabel={`Recorded time ${recordedTime}`} style={roomSecondary}>{recordedTime}</Text>
     )}
@@ -160,9 +160,17 @@ function Inside({
   );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [sheet, setSheet] = useState<"recording" | "guests" | "leave" | null>(null);
+  const [showNotice, setShowNotice] = useState(false);
+  const [focused, setFocused] = useState<string>();
   const lock = useRef(false);
   const control = poll.value,
     cap = control?.capture;
+  const waitingForMyConsent = cap?.state === "consent" && !cap.accepted;
+  useEffect(() => {
+    if (waitingForMyConsent) setSheet(current => current ?? "recording");
+  }, [waitingForMyConsent]);
+
   async function run(fn: () => Promise<unknown>) {
     if (lock.current) return;
     lock.current = true;
@@ -178,35 +186,56 @@ function Inside({
       setBusy(false);
     }
   }
-  const act = (label: string, name: string, body?: unknown) => (
-    <Action
+  const act = (label: string, name: string, { body, dismiss, kind = "primary" }: {
+    body?: unknown;
+    dismiss?: boolean;
+    kind?: React.ComponentProps<typeof RoomButton>["kind"];
+  } = {}) => (
+    <RoomButton
       key={name + label}
       label={label}
+      kind={kind}
       disabled={busy}
-      onPress={() => void run(() => command(name, body))}
+      onPress={() => void run(async () => {
+        await command(name, body);
+        if (dismiss) setSheet(null);
+      })}
     />
   );
   function end() {
-    Alert.alert("Leave meeting?", meeting.title, [
-      { text: "Keep meeting", style: "cancel" },
-      {
-        text: "End meeting",
-        style: "destructive",
-        onPress: () =>
-          void run(async () => {
-            endRequested.current = true;
-            try {
-              await command("end");
-              onEnd();
-            } catch (e) {
-              endRequested.current = false;
-              throw e;
-            }
-          }),
-      },
-      { text: "Leave room", onPress: onLeave },
-    ]);
+    void run(async () => {
+      endRequested.current = true;
+      try {
+        await command("end");
+        onEnd();
+      } catch (e) {
+        endRequested.current = false;
+        throw e;
+      }
+    });
   }
+  const preparing = control?.bookingRoom === "preparing";
+  const lobby = control?.isHost ? control.admissions?.filter(g => g.verified && g.state === "requested") ?? [] : [];
+  const primaryTrack = tracks.find(track => track.participant.identity === focused)
+    ?? tracks.find(track => !track.participant.isLocal)
+    ?? tracks[0];
+  const previews = tracks.filter(track => track !== primaryTrack);
+  function tile(track: typeof tracks[number], primary: boolean) {
+    const person = track.participant;
+    return <ParticipantTile key={person.identity}
+      name={person.isLocal ? control?.isHost ? "You · Host" : "You" : person.name || "Guest"}
+      avatarName={person.name || (person.isLocal ? "You" : "Guest")}
+      sage={person.isLocal} micOn={person.isMicrophoneEnabled} size={primary ? "stage" : "preview"}
+      focus={primary ? undefined : () => setFocused(person.identity)}>
+      {isTrackReference(track) && !track.publication.isMuted && (
+        <VideoTrack trackRef={track} objectFit="contain" style={StyleSheet.absoluteFill} />
+      )}
+    </ParticipantTile>;
+  }
+  const captureAvailable = cap?.enabled && !preparing;
+  const canWithdraw = !control?.isHost && !cap?.recordingOptOut && cap?.accepted &&
+    ["starting", "recording", "paused"].includes(cap.state);
+  const errorMessage = roomError || error || poll.error;
   const footer = <RoomControls>
     {join.canPublish && <>
       <RoomControl icon={isMicrophoneEnabled ? "mic-outline" : "mic-off-outline"}
@@ -216,67 +245,54 @@ function Inside({
         label={isCameraEnabled ? "Camera on" : "Camera off"} accessibilityLabel={isCameraEnabled ? "Turn camera off" : "Turn camera on"}
         disabled={busy} onPress={() => void run(() => localParticipant.setCameraEnabled(!isCameraEnabled))} />}
     </>}
-    <RoomControl icon="call-outline" label={control?.isHost ? "End meeting" : "Leave"}
-      accessibilityLabel={control?.isHost ? "End meeting options" : "Leave room"} danger disabled={busy}
-      onPress={control?.isHost ? end : onLeave} />
+    {captureAvailable && <RoomControl icon="radio-button-on-outline" label="Recording"
+      accessibilityLabel="Recording options" active={cap.state === "recording"} disabled={busy}
+      onPress={() => { setShowNotice(false); setSheet("recording"); }} />}
+    <RoomControl icon="call-outline" label="Leave" accessibilityLabel="Leave meeting options" danger disabled={busy}
+      onPress={() => setSheet("leave")} />
   </RoomControls>;
   return (
-    <RoomCanvas title={meeting.title} live={Boolean(control && control.bookingRoom !== "preparing")}
+    <RoomCanvas title={meeting.title} live={Boolean(control && !preparing)}
       subtitle={tracks.length + (tracks.length === 1 ? " participant" : " participants")}
-      status={cap && <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut} />}
+      status={captureAvailable && <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut} />}
       footer={footer}>
-      <Notice>{roomError || error || poll.error}</Notice>
-      {control?.bookingRoom === "preparing" && control.isHost && (
-        <RoomPanel title="You’re here early">
-          {act("Open meeting early", "open-booking-early")}
-        </RoomPanel>
-      )}
-      {tracks.map((track) => (
-        <ParticipantTile key={track.participant.identity}
-          name={track.participant.isLocal ? control?.isHost ? "You · Host" : "You" : track.participant.name || "Guest"}
-          sage={track.participant.isLocal} micOn={track.participant.isMicrophoneEnabled}>
-          {isTrackReference(track) && !track.publication.isMuted && (
-            <VideoTrack trackRef={track} style={{ width: "100%", height: 190 }} />
-          )}
-        </ParticipantTile>
-      ))}
-      {control?.isHost &&
-        control.admissions
-          ?.filter((g) => g.verified && g.state === "requested")
-          .map((g) => (
-            <RoomPanel key={g.id} title={g.name}>
-              <Text style={roomSecondary}>Verified guest · Waiting</Text>
-              {act("Admit guest", "guest-decision", {
-                requestId: g.id,
-                decision: "approve",
-              })}
-            </RoomPanel>
-          ))}
-      {cap && (cap.state === "consent" || (cap.enabled && cap.canManage && cap.state !== "stopping")) && (
-        <RoomPanel title="Meeting capture">
-          {cap.enabled &&
-            cap.state === "off" &&
-            cap.canManage &&
+      {!!errorMessage && !sheet && <Notice>{errorMessage}</Notice>}
+      {preparing && control?.isHost && act("Open meeting early", "open-booking-early", { kind: "inline" })}
+      {lobby.length > 0 && <RoomButton label={`${lobby.length} ${lobby.length === 1 ? "guest" : "guests"} waiting`}
+        kind="inline" onPress={() => setSheet("guests")} />}
+      {primaryTrack ? tile(primaryTrack, true) : <View style={{ flex: 1 }} />}
+      {previews.length > 0 && <ParticipantPreviews>{previews.map(track => tile(track, false))}</ParticipantPreviews>}
+      {sheet === "guests" && <RoomSheet title="Waiting room" busy={busy} close={() => setSheet(null)}>
+        <Notice>{errorMessage}</Notice>
+        {lobby.length === 0 && <Text style={roomSecondary}>No guests waiting.</Text>}
+        {lobby.map(guest => <View key={guest.id} style={{ gap: 6 }}>
+          <Text style={roomText}>{guest.name}</Text>
+          {act("Admit guest", "guest-decision", { body: { requestId: guest.id, decision: "approve" }, dismiss: lobby.length === 1 })}
+        </View>)}
+      </RoomSheet>}
+      {sheet === "leave" && <RoomSheet title="Leave meeting?" busy={busy} close={() => setSheet(null)}>
+        <Notice>{errorMessage}</Notice>
+        {control?.isHost && <Text style={roomSecondary}>You can leave the room and rejoin later, or end the meeting for everyone.</Text>}
+        <RoomButton label="Leave room" disabled={busy} onPress={onLeave} />
+        {control?.isHost && <RoomButton label="End for everyone" kind="danger" disabled={busy} onPress={end} />}
+        <RoomButton label="Keep meeting" disabled={busy} onPress={() => setSheet(null)} />
+      </RoomSheet>}
+      {sheet === "recording" && <RoomSheet title="Recording" busy={busy} close={() => setSheet(null)}>
+        <Notice>{errorMessage}</Notice>
+        {cap ? <>
+          <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut} />
+          {cap.enabled && cap.state === "off" && cap.canManage && !cap.recordingOptOut &&
             (cap.canStartAlone ? <>
-              <Text style={roomSecondary}>{cap.notice}</Text>
-              {act("Start recording", "capture-start-early")}
+              <Text style={roomSecondary}>Flo records audio and processes it with AI to create meeting notes.</Text>
+              {act("Start recording", "capture-start-early", { dismiss: true })}
             </> : act("Request recording consent", "capture-request"))}
           {cap.state === "consent" && (
             <>
-              <Text style={roomSecondary}>
-                {cap.notice ||
-                  "Audio will be recorded and processed for meeting notes."}
-              </Text>
-              {!cap.accepted && (
+              {waitingForMyConsent && (
                 <>
-                  {act(
-                    "Agree to recording and AI processing",
-                    "capture-consent",
-                    { accepted: true },
-                  )}
-                  {act("Decline recording", "capture-consent", {
-                    accepted: false,
-                  })}
+                  <Text style={roomSecondary}>Flo records audio and processes it with AI to create meeting notes.</Text>
+                  {act("Agree to recording and AI processing", "capture-consent", { body: { accepted: true }, dismiss: !cap.canManage })}
+                  {act("Decline recording", "capture-consent", { body: { accepted: false }, dismiss: true, kind: "secondary" })}
                 </>
               )}
               {!!cap.waiting?.length && (
@@ -285,16 +301,18 @@ function Inside({
               {cap.canManage &&
                 cap.accepted &&
                 !cap.waiting?.length &&
-                act("Start audio recording", "capture-start")}
+                act("Start audio recording", "capture-start", { dismiss: true })}
             </>
           )}
           {cap.canManage && ["starting", "recording"].includes(cap.state) &&
-            act("Stop recording", "capture-stop")}
-          {cap.canManage && cap.state === "paused" && act("Resume recording", "capture-resume")}
-        </RoomPanel>
-      )}
-      {cap && !control?.isHost && !cap.recordingOptOut && cap.accepted &&
-        ["starting", "recording", "paused"].includes(cap.state) && act("Withdraw consent", "capture-withdraw")}
+            act("Stop recording", "capture-stop", { dismiss: true })}
+          {cap.canManage && cap.state === "paused" && !cap.recordingOptOut && act("Resume recording", "capture-resume", { dismiss: true })}
+          {canWithdraw && act("Withdraw consent", "capture-withdraw", { dismiss: true })}
+          {!!cap.notice && <RoomButton label={showNotice ? "Hide recording details" : "Recording details"}
+            onPress={() => setShowNotice(current => !current)} />}
+          {showNotice && <Text style={roomSecondary}>{cap.notice}</Text>}
+        </> : <Text style={roomSecondary}>Recording status unavailable.</Text>}
+      </RoomSheet>}
     </RoomCanvas>
   );
 }

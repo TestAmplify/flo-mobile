@@ -9,7 +9,7 @@ import renderer, { act } from "react-test-renderer";
 const require = createRequire(import.meta.url);
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-test("Maya joins and rejoins muted, requests consent, edits the capture and resolves Leo’s follow-up", async () => {
+test("Maya rejoins muted, records from the call controls, admits Leo and reviews the recap", async () => {
   const meeting = {
     _id: "meeting-leo",
     title: "Design review with Leo",
@@ -27,10 +27,14 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
   let state = "off",
     agreed = false,
     preparing = true,
+    canStartAlone = false,
+    recordingOptOut = false,
+    waitingGuest = false,
+    hasGuest = false,
     ended = false,
     done = false,
     sent;
-  let dialog, persisted;
+  let persisted;
   let awakeRooms = 0;
   const mediaProps = [],
     calls = [];
@@ -103,6 +107,22 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
         assert.equal(agreed, true);
         state = "recording";
         break;
+      case "capture-stop":
+        state = "off";
+        canStartAlone = true;
+        break;
+      case "capture-start-early":
+        assert.equal(hasGuest, false);
+        state = "recording";
+        waitingGuest = true;
+        break;
+      case "guest-decision":
+        assert.deepEqual(body, { requestId: "guest-leo", decision: "approve" });
+        waitingGuest = false;
+        hasGuest = true;
+        recordingOptOut = true;
+        state = "off";
+        break;
       case "end":
         ended = true;
         meeting.organizer.state = "ended";
@@ -111,12 +131,15 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
         return {
           isHost: true,
           bookingRoom: preparing ? "preparing" : "open",
+          admissions: waitingGuest ? [{ id: "guest-leo", name: "Leo", state: "requested", verified: true }] : [],
           capture: {
             enabled: true,
             canManage: true,
             state,
             accepted: agreed,
             waiting: [],
+            canStartAlone: canStartAlone && !hasGuest,
+            recordingOptOut,
             ...(state === "recording" ? { elapsedMs: 12_000 } : {}),
           },
         };
@@ -167,12 +190,8 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     "react-native": {
       ...hosts,
       Platform: { OS: "ios" },
-      StyleSheet: { create: (v) => v },
-      Alert: {
-        alert: (...args) => {
-          dialog = args;
-        },
-      },
+      StyleSheet: { create: (v) => v, absoluteFill: {} },
+      Modal: "Modal",
     },
     "expo-secure-store": {
       getItemAsync: async () => persisted,
@@ -202,7 +221,12 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
         isMicrophoneEnabled: false,
         isCameraEnabled: false,
       }),
-      useTracks: () => [],
+      useTracks: () => [
+        { participant: { identity: "maya", name: "Maya Rivera", isLocal: true, isMicrophoneEnabled: false }, publication: { isMuted: true } },
+        ...(hasGuest ? [{ participant: { identity: "leo", name: "Leo", isLocal: false, isMicrophoneEnabled: true }, publication: { isMuted: false } }] : []),
+      ],
+      isTrackReference: (track) => Boolean(track.publication),
+      VideoTrack: "VideoTrack",
     },
   };
   const cache = new Map();
@@ -264,10 +288,8 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     assert.deepEqual(tree.root.findAllByType("Switch").map(n => n.props.value), [false, false]);
     await press("Enter room early");
     assert.equal(awakeRooms, 1);
-    await press("End meeting options");
-    await act(async () => {
-      dialog[2].find(option => option.text === "Leave room").onPress();
-    });
+    await press("Leave meeting options");
+    await press("Leave room");
     assert.equal(awakeRooms, 0);
     await press("Enter room early");
     await press("Enter room early");
@@ -277,15 +299,32 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     ]);
     assert.equal(awakeRooms, 1);
     await press("Open meeting early");
+    await press("Recording options");
     await press("Request recording consent");
     await press("Agree to recording and AI processing");
     assert.equal(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length, 0);
     await press("Start audio recording");
     assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length > 0);
-    await press("End meeting options");
-    await act(async () => {
-      dialog[2][1].onPress();
-    });
+    assert.equal(tree.root.findAllByType("Modal").length, 0);
+    await press("Recording options");
+    await press("Stop recording");
+    await press("Recording options");
+    await press("Start recording");
+    assert.ok(calls.some(path => path.endsWith("/capture-start-early")));
+    await press("1 guest waiting");
+    await press("Admit guest");
+    assert.ok(tree.root.findAllByType("Text").some(node => node.props.children === "Continuing without recording"));
+    const guestVideo = tree.root.findByType("VideoTrack");
+    assert.equal(guestVideo.props.objectFit, "contain");
+    assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Leo, microphone on" }).length > 0);
+    assert.equal(guestVideo.parent.findAllByProps({ accessibilityLabel: "Leo, microphone on" }).length, 0);
+    await press("Focus You · Host, microphone off");
+    assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Focus Leo, microphone on" }).length > 0);
+    await press("Leave meeting options");
+    await press("Keep meeting");
+    assert.equal(awakeRooms, 1);
+    await press("Leave meeting options");
+    await press("End for everyone");
     await press("Review & send");
     assert.equal(awakeRooms, 0);
     const input = tree.root

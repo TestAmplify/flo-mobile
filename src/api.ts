@@ -9,6 +9,11 @@ export class ApiError extends Error {
     super(message);
   }
 }
+class ConnectionError extends Error {
+  constructor(cause: unknown) {
+    super("Couldn’t connect to Flo. Check your connection and try again.", { cause });
+  }
+}
 export type Client = <T>(path: string, body?: unknown) => Promise<T>;
 export function client(token?: string): Client {
   return async (path, body) => {
@@ -23,7 +28,7 @@ export function client(token?: string): Client {
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
-      });
+      }).catch((error: unknown) => { throw new ConnectionError(error); });
       const data = await response.json().catch(() => null);
       if (!response.ok)
         throw new ApiError(
