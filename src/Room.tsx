@@ -17,7 +17,8 @@ import {
 } from "@livekit/react-native";
 import { Track } from "livekit-client";
 import { client, Meeting, message, useResource } from "./api";
-import { Page, Action, Notice, s } from "./ui";
+import { Action, Notice, s } from "./ui";
+import { ParticipantTile, RoomCanvas, RoomControl, RoomControls, RoomPanel, roomSecondary, roomText, type RoomDevices } from "./RoomView";
 
 export type Join = {
   accessToken: string;
@@ -38,6 +39,8 @@ type Controls = {
     waiting?: string[];
     notice?: string;
     elapsedMs?: number;
+    canStartAlone?: boolean;
+    recordingOptOut?: boolean;
   };
 };
 const captureLabels: Record<string, string> = {
@@ -49,7 +52,7 @@ const captureLabels: Record<string, string> = {
   stopping: "Stopping audio recording…",
 };
 
-function CaptureStatus({ state, elapsedMs }: { state: string; elapsedMs?: number }) {
+function CaptureStatus({ state, elapsedMs, optedOut }: { state: string; elapsedMs?: number; optedOut?: boolean }) {
   const [elapsed, setElapsed] = useState(elapsedMs);
   useEffect(() => {
     setElapsed(elapsedMs);
@@ -60,13 +63,14 @@ function CaptureStatus({ state, elapsedMs }: { state: string; elapsedMs?: number
   }, [state, elapsedMs]);
 
   const duration = state === "recording" ? elapsed : elapsedMs;
+  const continuingWithoutRecording = optedOut && (state === "off" || state === "paused");
   const seconds = Math.max(0, Math.floor((duration ?? 0) / 1000));
   const recordedTime = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   return <View style={s.row}>
     {state === "recording" && <View style={{ backgroundColor: "#a32944", borderRadius: 4, height: 8, width: 8 }} />}
-    <Text accessibilityLiveRegion="polite" style={s.text}>{captureLabels[state] ?? "Recording status unavailable"}</Text>
-    {duration !== undefined && (state === "recording" || state === "paused") && (
-      <Text accessibilityLabel={`Recorded time ${recordedTime}`} style={s.meta}>{recordedTime}</Text>
+    <Text accessibilityLiveRegion="polite" style={roomText}>{continuingWithoutRecording ? "Meeting continues without recording" : captureLabels[state] ?? "Recording status unavailable"}</Text>
+    {duration !== undefined && !continuingWithoutRecording && (state === "recording" || state === "paused") && (
+      <Text accessibilityLabel={`Recorded time ${recordedTime}`} style={roomSecondary}>{recordedTime}</Text>
     )}
   </View>;
 }
@@ -74,6 +78,7 @@ function CaptureStatus({ state, elapsedMs }: { state: string; elapsedMs?: number
 type Props = {
   meeting: Meeting;
   join: Join;
+  devices: RoomDevices;
   onLeave: () => void;
   onEnd: () => void;
 };
@@ -97,19 +102,20 @@ export function MeetingRoom(props: Props) {
       void start.then(() => AudioSession.stopAudioSession()).catch(() => {});
     };
   }, []);
-  return (
-    <Page>
-      <Text style={s.label}>Flo Live</Text>
-      <Text style={s.title}>{props.meeting.title}</Text>
+  const connecting = (
+    <RoomCanvas title={props.meeting.title} live={false} subtitle={error ? "Room disconnected" : "Connecting…"}>
       <Notice>{error}</Notice>
-      {ready && (
+      <Action secondary label="Back to Meetings" onPress={props.onLeave} />
+    </RoomCanvas>
+  );
+  return ready ? (
         <LiveKitRoom
           token={props.join.accessToken}
           serverUrl={props.join.serverUrl}
           connect
-          audio={false}
-          video={false}
-          onConnected={() => setConnected(true)}
+          audio={props.devices.mic}
+          video={props.devices.camera}
+          onConnected={() => { setConnected(true); setError(""); }}
           onError={(e) => setError(message(e))}
           onDisconnected={() => {
             setConnected(false);
@@ -119,21 +125,9 @@ export function MeetingRoom(props: Props) {
               );
           }}
         >
-          {connected && <Inside {...props} endRequested={endRequested} />}
+          {connected ? <Inside {...props} endRequested={endRequested} roomError={error} /> : connecting}
         </LiveKitRoom>
-      )}
-      {!connected && (
-        <>
-          <Text style={s.meta}>
-            {error
-              ? "Room disconnected"
-              : "Connecting with microphone and camera off…"}
-          </Text>
-          <Action secondary label="Back to Meetings" onPress={props.onLeave} />
-        </>
-      )}
-    </Page>
-  );
+  ) : connecting;
 }
 function Inside({
   join,
@@ -141,7 +135,8 @@ function Inside({
   onLeave,
   onEnd,
   endRequested,
-}: Props & { endRequested: React.RefObject<boolean> }) {
+  roomError,
+}: Props & { endRequested: React.RefObject<boolean>; roomError: string }) {
   useKeepAwake(undefined, { suppressDeactivateWarnings: true });
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled } =
     useLocalParticipant();
@@ -192,7 +187,7 @@ function Inside({
     />
   );
   function end() {
-    Alert.alert("End meeting for everyone?", meeting.title, [
+    Alert.alert("Leave meeting?", meeting.title, [
       { text: "Keep meeting", style: "cancel" },
       {
         text: "End meeting",
@@ -209,100 +204,66 @@ function Inside({
             }
           }),
       },
+      { text: "Leave room", onPress: onLeave },
     ]);
   }
+  const footer = <RoomControls>
+    {join.canPublish && <>
+      <RoomControl icon={isMicrophoneEnabled ? "mic-outline" : "mic-off-outline"}
+        label={isMicrophoneEnabled ? "Mic on" : "Mic off"} accessibilityLabel={isMicrophoneEnabled ? "Mute mic" : "Turn mic on"}
+        disabled={busy} onPress={() => void run(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled))} />
+      {meeting.callMode !== "audio" && <RoomControl icon={isCameraEnabled ? "videocam-outline" : "videocam-off-outline"}
+        label={isCameraEnabled ? "Camera on" : "Camera off"} accessibilityLabel={isCameraEnabled ? "Turn camera off" : "Turn camera on"}
+        disabled={busy} onPress={() => void run(() => localParticipant.setCameraEnabled(!isCameraEnabled))} />}
+    </>}
+    <RoomControl icon="call-outline" label={control?.isHost ? "End meeting" : "Leave"}
+      accessibilityLabel={control?.isHost ? "End meeting options" : "Leave room"} danger disabled={busy}
+      onPress={control?.isHost ? end : onLeave} />
+  </RoomControls>;
   return (
-    <>
-      <Notice>{error || poll.error}</Notice>
+    <RoomCanvas title={meeting.title} live={Boolean(control && control.bookingRoom !== "preparing")}
+      subtitle={tracks.length + (tracks.length === 1 ? " participant" : " participants")}
+      status={cap && <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} optedOut={cap.recordingOptOut} />}
+      footer={footer}>
+      <Notice>{roomError || error || poll.error}</Notice>
       {control?.bookingRoom === "preparing" && control.isHost && (
-        <View style={[s.card, s.feature]}>
-          <Text style={s.heading}>You’re here early</Text>
+        <RoomPanel title="You’re here early">
           {act("Open meeting early", "open-booking-early")}
-        </View>
+        </RoomPanel>
       )}
       {tracks.map((track) => (
-        <View
-          key={track.participant.identity}
-          style={{
-            backgroundColor: "#312a39",
-            borderRadius: 20,
-            padding: 12,
-            gap: 7,
-          }}
-        >
-          {isTrackReference(track) && !track.publication.isMuted ? (
-            <VideoTrack
-              trackRef={track}
-              style={{ height: 190, borderRadius: 14 }}
-            />
-          ) : (
-            <Text
-              style={{
-                textAlign: "center",
-                padding: 24,
-                fontSize: 30,
-                color: "white",
-              }}
-            >
-              {(track.participant.name || "Guest").slice(0, 1)}
-            </Text>
+        <ParticipantTile key={track.participant.identity}
+          name={track.participant.isLocal ? control?.isHost ? "You · Host" : "You" : track.participant.name || "Guest"}
+          sage={track.participant.isLocal} micOn={track.participant.isMicrophoneEnabled}>
+          {isTrackReference(track) && !track.publication.isMuted && (
+            <VideoTrack trackRef={track} style={{ width: "100%", height: 190 }} />
           )}
-          <Text style={{ color: "white" }}>
-            {track.participant.name || "Guest"} ·{" "}
-            {track.participant.isMicrophoneEnabled ? "Mic on" : "Mic off"}
-          </Text>
-        </View>
+        </ParticipantTile>
       ))}
-      {join.canPublish && (
-        <View style={s.row}>
-          <Action
-            secondary
-            disabled={busy}
-            label={isMicrophoneEnabled ? "Mute mic" : "Turn mic on"}
-            onPress={() =>
-              void run(() =>
-                localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled),
-              )
-            }
-          />
-          {meeting.callMode !== "audio" && (
-            <Action
-              secondary
-              disabled={busy}
-              label={isCameraEnabled ? "Turn camera off" : "Turn camera on"}
-              onPress={() =>
-                void run(() =>
-                  localParticipant.setCameraEnabled(!isCameraEnabled),
-                )
-              }
-            />
-          )}
-        </View>
-      )}
       {control?.isHost &&
         control.admissions
           ?.filter((g) => g.verified && g.state === "requested")
           .map((g) => (
-            <View key={g.id} style={s.card}>
-              <Text style={s.heading}>{g.name}</Text>
-              <Text style={s.meta}>Verified guest · Waiting</Text>
+            <RoomPanel key={g.id} title={g.name}>
+              <Text style={roomSecondary}>Verified guest · Waiting</Text>
               {act("Admit guest", "guest-decision", {
                 requestId: g.id,
                 decision: "approve",
               })}
-            </View>
+            </RoomPanel>
           ))}
-      {cap && (
-        <View style={s.card}>
-          <Text style={s.heading}>Meeting capture</Text>
-          <CaptureStatus state={cap.state} elapsedMs={cap.elapsedMs} />
+      {cap && (cap.state === "consent" || (cap.enabled && cap.canManage && cap.state !== "stopping")) && (
+        <RoomPanel title="Meeting capture">
           {cap.enabled &&
             cap.state === "off" &&
             cap.canManage &&
-            act("Request recording consent", "capture-request")}
+            (cap.canStartAlone ? <>
+              <Text style={roomSecondary}>{cap.notice}</Text>
+              {act("Start recording", "capture-start-early")}
+            </> : act("Request recording consent", "capture-request"))}
           {cap.state === "consent" && (
             <>
-              <Text style={s.meta}>
+              <Text style={roomSecondary}>
                 {cap.notice ||
                   "Audio will be recorded and processed for meeting notes."}
               </Text>
@@ -319,7 +280,7 @@ function Inside({
                 </>
               )}
               {!!cap.waiting?.length && (
-                <Text style={s.meta}>Waiting for {cap.waiting.join(", ")}</Text>
+                <Text style={roomSecondary}>Waiting for {cap.waiting.join(", ")}</Text>
               )}
               {cap.canManage &&
                 cap.accepted &&
@@ -327,23 +288,13 @@ function Inside({
                 act("Start audio recording", "capture-start")}
             </>
           )}
-          {cap.canManage &&
-            ["starting", "recording", "paused"].includes(cap.state) &&
+          {cap.canManage && ["starting", "recording"].includes(cap.state) &&
             act("Stop recording", "capture-stop")}
-          {!cap.canManage &&
-            cap.accepted &&
-            ["starting", "recording", "paused"].includes(cap.state) &&
-            act("Withdraw consent", "capture-withdraw")}
-        </View>
+          {cap.canManage && cap.state === "paused" && act("Resume recording", "capture-resume")}
+        </RoomPanel>
       )}
-      {control?.isHost && (
-        <Action
-          label="End meeting for everyone"
-          disabled={busy}
-          onPress={end}
-        />
-      )}
-      <Action secondary label="Leave room" onPress={onLeave} />
-    </>
+      {cap && !control?.isHost && !cap.recordingOptOut && cap.accepted &&
+        ["starting", "recording", "paused"].includes(cap.state) && act("Withdraw consent", "capture-withdraw")}
+    </RoomCanvas>
   );
 }

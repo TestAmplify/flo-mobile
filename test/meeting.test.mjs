@@ -149,10 +149,13 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
       "ScrollView",
       "ActivityIndicator",
       "Pressable",
+      "Switch",
+      "StatusBar",
       "KeyboardAvoidingView",
     ].map((k) => [k, k]),
   );
   const mocks = {
+    "@expo/vector-icons/Ionicons": "Icon",
     "expo-keep-awake": {
       useKeepAwake() {
         React.useEffect(() => {
@@ -231,7 +234,8 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     const node = tree.root.findAll(
       (n) =>
         n.type === "Pressable" &&
-        n.findAllByType("Text").some((t) => t.props.children === label),
+        (n.props.accessibilityLabel === label ||
+          n.findAllByType("Text").some((t) => t.props.children === label)),
     )[0];
     assert.ok(node, label);
     assert.ok(!node.props.disabled, label + " disabled");
@@ -257,9 +261,13 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     assert.equal(persisted, "fake-host");
     await press("Enter room early");
     assert.equal(awakeRooms, 0);
+    assert.deepEqual(tree.root.findAllByType("Switch").map(n => n.props.value), [false, false]);
     await press("Enter room early");
     assert.equal(awakeRooms, 1);
-    await press("Leave room");
+    await press("End meeting options");
+    await act(async () => {
+      dialog[2].find(option => option.text === "Leave room").onPress();
+    });
     assert.equal(awakeRooms, 0);
     await press("Enter room early");
     await press("Enter room early");
@@ -274,7 +282,7 @@ test("Maya joins and rejoins muted, requests consent, edits the capture and reso
     assert.equal(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length, 0);
     await press("Start audio recording");
     assert.ok(tree.root.findAllByProps({ accessibilityLabel: "Recorded time 00:12" }).length > 0);
-    await press("End meeting for everyone");
+    await press("End meeting options");
     await act(async () => {
       dialog[2][1].onPress();
     });

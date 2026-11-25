@@ -21,6 +21,7 @@ import {
   useResource,
 } from "./api";
 import { Join, MeetingRoom } from "./Room";
+import { RoomSetup, type RoomDevices } from "./RoomView";
 import { AfterMeeting } from "./Recap";
 import { Action, Brand, Field, Notice, Page, ink, lilac, s } from "./ui";
 
@@ -153,6 +154,7 @@ function Workspace({
     [join, setJoin] = useState<Join>(),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [roomDevices, setRoomDevices] = useState<RoomDevices>({ mic: false, camera: false });
   const lock = useRef(false);
   const api = useMemo<Client>(() => {
     const call = client(session.token);
@@ -176,7 +178,7 @@ function Workspace({
     setScreen("list");
     list.refresh();
   };
-  async function enter() {
+  async function enter(devices: RoomDevices) {
     if (!selected || lock.current) return;
     lock.current = true;
     setBusy(true);
@@ -194,6 +196,7 @@ function Workspace({
           "This room is unavailable. Refresh Meetings and try again.",
         );
       setJoin(ticket);
+      setRoomDevices(devices);
       setScreen("room");
     } catch (e) {
       setError(message(e));
@@ -207,6 +210,7 @@ function Workspace({
       <MeetingRoom
         meeting={selected}
         join={join}
+        devices={roomDevices}
         onLeave={back}
         onEnd={() => {
           setJoin(undefined);
@@ -227,45 +231,7 @@ function Workspace({
       />
     );
   if (selected && screen === "setup")
-    return (
-      <Page>
-        <Action
-          secondary
-          disabled={busy}
-          label="Back to Meetings"
-          onPress={back}
-        />
-        <Text style={s.label}>Room setup</Text>
-        <Text style={s.title}>{selected.title}</Text>
-        <Text style={s.meta}>{dateLabel(selected.startTime)}</Text>
-        <View style={[s.card, s.feature]}>
-          <Text style={s.heading}>Microphone is off</Text>
-          <Text style={s.heading}>Camera is off</Text>
-          <Text style={s.meta}>You can turn them on inside the room.</Text>
-        </View>
-        <Text style={s.meta}>
-          {selected.recordingMode === "required"
-            ? "Joining requires consent to audio recording and AI processing."
-            : selected.recordingMode === "off"
-              ? "Recording is off."
-              : "Recording requires consent from everyone."}
-        </Text>
-        <Notice>{error}</Notice>
-        <Action
-          label={
-            busy
-              ? "Joining…"
-              : selected.recordingMode === "required"
-                ? "Agree and join"
-                : selected.organizer?.canPrepare
-                  ? "Enter room early"
-                  : "Join room"
-          }
-          disabled={busy}
-          onPress={() => void enter()}
-        />
-      </Page>
-    );
+    return <RoomSetup key={selected._id} meeting={selected} busy={busy} error={error} back={back} join={devices => void enter(devices)} />;
   const rows = (list.value || [])
     .filter((m) => m.bookingManaged && history(m) === (tab === "History"))
     .sort(
